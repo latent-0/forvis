@@ -3,7 +3,8 @@
   "framework": null,
   "outputDirectory": "public",
   "functions": {
-    "api/extract.js": { "maxDuration": 30 }
+    "api/extract.js": { "maxDuration": 30 },
+    "api/draft.js": { "maxDuration": 30 }
   },
   "headers": [
     {

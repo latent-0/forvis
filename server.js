@@ -1,4 +1,4 @@
-// Local server: serves public/ and the same /api/extract function Vercel runs.
+// Local server: serves public/ and the same /api functions Vercel runs.
 // Run: npm start  (reads .env if present), then open http://localhost:4317
 import http from 'node:http';
 import fs from 'node:fs';
@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 try { process.loadEnvFile(path.join(ROOT, '.env')); } catch { /* no .env */ }
 const { default: extract } = await import('./api/extract.js');
+const { default: draft } = await import('./api/draft.js');
+const FUNCTIONS = { '/api/extract': extract, '/api/draft': draft };
 
 const PORT = Number(process.env.PORT || 4317);
 const PUBLIC = path.join(ROOT, 'public');
@@ -32,11 +34,11 @@ function wrap(res) {
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://local');
-  if (url.pathname === '/api/extract') {
+  if (FUNCTIONS[url.pathname]) {
     wrap(res);
     try { req.body = req.method === 'POST' ? await readJson(req) : {}; }
     catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
-    return extract(req, res);
+    return FUNCTIONS[url.pathname](req, res);
   }
   let p = decodeURIComponent(url.pathname);
   if (p === '/') p = '/index.html';

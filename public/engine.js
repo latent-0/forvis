@@ -22,6 +22,25 @@ const DEFAULT_REGISTER = [
   { id: 'UC-03', useCase: 'Invoice to ledger', serviceLine: 'Outsourcing', family: 'Process automation', model: 'Not selected', dataSource: 'Not agreed', owner: 'To be named', humanControl: 'Accountant approves exceptions before posting.', status: 'Proposed', notes: '' },
 ];
 const REGISTER_STATUSES = ['Proposed', 'POC', 'Pilot', 'Live', 'Paused', 'Stopped'];
+// Five checks before any tool reaches a client team. Pilot and Live are gated on all five.
+export const FIVE_CHECKS = [
+  { key: 'lawful', name: 'Lawful', question: 'Allowed in this market' },
+  { key: 'explainable', name: 'Explainable', question: 'A reviewer can follow it' },
+  { key: 'protected', name: 'Protected', question: 'Client data kept apart' },
+  { key: 'fair', name: 'Fair', question: 'Tested for bias' },
+  { key: 'owned', name: 'Owned', question: 'A person is accountable' },
+];
+const GATED = ['Pilot', 'Live'];
+const DEFAULT_CHECKS = {
+  'UC-01': {
+    lawful: { done: false, note: 'Awaiting risk and independence review' },
+    explainable: { done: true, by: 'M. Reyes', note: 'Every field traces to the source text; every flag has a coded rule' },
+    protected: { done: true, by: 'M. Reyes', note: 'Synthetic data only; reader key held server-side' },
+    fair: { done: false, note: 'Not yet tested on real document mix' },
+    owned: { done: true, by: 'M. Reyes', note: 'Named owner and approver' },
+  },
+};
+const checksFor = (id, stored) => Object.fromEntries(FIVE_CHECKS.map((c) => [c.key, stored?.[c.key] || DEFAULT_CHECKS[id]?.[c.key] || { done: false, note: '' }]));
 const MIME = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
 export const mimeFor = (name) => MIME[String(name).split('.').pop().toLowerCase()] || null;
 export const MAX_BYTES = 3 * 1024 * 1024;
@@ -378,6 +397,7 @@ const summary = (d) => ({
   flags: (d.flags || []).map((f) => ({ code: f.code, severity: f.severity, title: f.title })),
   lane: d.flags ? laneFor(d.flags) : null, edited: d.edited,
   review_status: d.review_status, reviewed_by: d.reviewed_by, signoff_by: d.signoff_by, signoff_at: d.signoff_at, error: d.error,
+  sampled: !!d.sampled, batch_approved: !!d.batch_approved,
 });
 
 function coverage(sc, docs) {
@@ -427,7 +447,14 @@ async function auditRows({ caseId, limit = 1000 } = {}) {
 async function register() {
   const [rows, docs, thr] = await Promise.all([kvGet('register', DEFAULT_REGISTER), docsAll(), threshold()]);
   const last = docs.reduce((a, d) => (d.queued_at && (!a || d.queued_at > a) ? d.queued_at : a), null);
-  return { statuses: REGISTER_STATUSES, rows: rows.map((r) => (r.id === 'UC-01' ? { ...r, live: { documents: docs.length, lastRun: last, threshold: thr, rules: RULES.length } } : r)) };
+  return {
+    statuses: REGISTER_STATUSES, gated: GATED, fiveChecks: FIVE_CHECKS,
+    rows: rows.map((r) => {
+      const checks = checksFor(r.id, r.checks);
+      const row = { ...r, checks, gateOpen: FIVE_CHECKS.every((c) => checks[c.key].done) };
+      return r.id === 'UC-01' ? { ...row, live: { documents: docs.length, lastRun: last, threshold: thr, rules: RULES.length } } : row;
+    }),
+  };
 }
 
 const originals = new Map();
@@ -468,6 +495,120 @@ export async function exportResults() {
 async function results() {
   const [docs, ans, mm, thr] = await Promise.all([docsAll(), answerSheet(), kvGet('manualMinutes', 6), threshold()]);
   return computeResults(docs, ans, { manualMinutes: mm, threshold: thr });
+}
+
+// ---------------------------------------------------------------- sample check (auditor checks a sample)
+
+const sampleEligible = async () => {
+  const thr = await threshold();
+  return (await docsAll()).filter((d) => d.stage === 'queued' && d.review_status === 'pending' && !d.sampled && d.flags && laneFor(d.flags) === 'clean' && (d.overall ?? 0) >= thr);
+};
+async function sampleApprove(rate, p) {
+  const eligible = await sampleEligible();
+  if (!eligible.length) throw err(409, 'No clean documents are waiting.');
+  const r = Math.min(1, Math.max(0.1, Number(rate) || 0.2));
+  const n = Math.max(1, Math.ceil(eligible.length * r));
+  // Unbiased random sample, logged so it can be re-performed.
+  const seed = crypto.getRandomValues(new Uint32Array(eligible.length));
+  const order = eligible.map((d, i) => ({ d, k: seed[i] })).sort((x, y) => x.k - y.k);
+  const sample = order.slice(0, n).map((x) => x.d);
+  const rest = order.slice(n).map((x) => x.d);
+  await audit({ actor: p.name, role: p.role, action: 'sample.selected', detail: { eligible: eligible.length, rate: r, sampled: sample.map((d) => d.id), batchApproved: rest.map((d) => d.id) } });
+  for (const d of sample) await saveDoc({ ...(await getDoc(d.id)), sampled: true });
+  const note = `Approved in batch: all coded checks passed and confidence above threshold; not selected in the ${Math.round(r * 100)}% sample of ${eligible.length} clean documents.`;
+  for (const d of rest) {
+    await saveDoc({ ...(await getDoc(d.id)), review_status: 'approved', reviewed_by: p.name, reviewed_at: nowIso(), review_note: note, batch_approved: true });
+    await audit({ caseId: d.id, actor: p.name, role: p.role, action: 'review.approved', detail: { note, batch: true, exceptionsAccepted: [], warnings: [] } });
+  }
+  return { eligible: eligible.length, sampled: sample.map((d) => d.id), approved: rest.length };
+}
+
+// ---------------------------------------------------------------- client follow-up requests
+
+const ASK = {
+  AMOUNT_TOLERANCE: () => 'Please confirm the correct amount and send any correcting entry.',
+  PERIOD: (d) => (d.fields?.doc_type === 'confirmation' ? 'Please confirm the balance as at the year end.' : 'Please send the statement for the requested period.'),
+  SIGNATURE: () => 'Please send a copy signed by all parties.',
+  DUPLICATE: () => 'Please confirm whether this is the same invoice already sent.',
+  WRONG_ENTITY: () => 'Please send the document for the audited entity.',
+  BALANCE: () => 'Please confirm the balance or explain the difference.',
+  NO_MATCH: () => 'Please tell us which request item this relates to.',
+  DATE_IN_FY: () => 'Please confirm the date or the period this relates to.',
+  REQUIRED_FIELDS: () => 'Please send a clearer or complete copy.',
+};
+// Client-facing wording: no internal case IDs, ledger codes or ISO dates.
+const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const niceDate = (iso) => { const m = String(iso || '').match(/(\d{4})-(\d{2})-(\d{2})/); return m ? `${+m[3]} ${MON3[+m[2] - 1]} ${m[1]}` : String(iso || ''); };
+const niceRange = (r) => String(r || '').split(/\s+to\s+/).map(niceDate).join(' to ');
+const titleish = (t) => String(t || '').replace(/\b([A-Z][A-Z&]+)\b/g, (w) => (['LTD', 'PLC', 'LLP'].includes(w) ? { LTD: 'Ltd', PLC: 'plc', LLP: 'LLP' }[w] : w.length <= 3 ? w : w[0] + w.slice(1).toLowerCase()));
+function clientFact(f, d) {
+  const file = d.file_name;
+  switch (f.code) {
+    case 'AMOUNT_TOLERANCE': return `${file}: the invoice total is ${f.found}; our ledger records ${f.expected}.`;
+    case 'PERIOD': return d.fields?.doc_type === 'confirmation' ? `${file}: the confirmation is as at ${niceDate(f.found)}; we asked for ${niceDate(f.expected)}.` : `${file}: the statement covers ${niceRange(f.found)}; we asked for ${niceRange(f.expected)}.`;
+    case 'SIGNATURE': return `${file}: not signed by ${titleish(String(f.message).replace(/^Unsigned:\s*/, '').replace(/\.$/, ''))} (${f.found}).`;
+    case 'DUPLICATE': { const m = String(f.message).match(/\(([^)]+)\)/); return `${file} appears to be the same invoice as ${m ? m[1] : 'one we already have'}.`; }
+    case 'WRONG_ENTITY': return `${file} is addressed to ${f.found}, not ${f.expected}.`;
+    case 'BALANCE': return `${file}: the balance shown is ${f.found}; our records show ${f.expected}.`;
+    case 'NO_MATCH': return `We could not match ${file} to an item on the request list.`;
+    case 'DATE_IN_FY': return `${file} is dated ${niceDate(f.found)}, outside the financial year.`;
+    default: return `${file}: some details could not be read.`;
+  }
+}
+const CLIENT_CODES = ['AMOUNT_TOLERANCE', 'PERIOD', 'SIGNATURE', 'DUPLICATE', 'WRONG_ENTITY', 'BALANCE', 'NO_MATCH', 'DATE_IN_FY', 'REQUIRED_FIELDS'];
+async function clientRequests() {
+  const [sc, docs, sent] = await Promise.all([scenario(), docsAll(), kvGet('clientRequests', {})]);
+  const items = [];
+  for (const d of docs) {
+    if (d.stage !== 'queued' || d.signoff_at) continue;
+    if (d.review_status === 'rejected') {
+      items.push({ key: `rep:${d.id}`, kind: 'Replacement', caseId: d.id, file: d.file_name, requestId: d.match?.requestId || null, fact: `${d.file_name} could not be accepted: ${d.review_note}`, ask: 'Please send a replacement document.' });
+      continue;
+    }
+    const fl = (d.flags || []).filter((f) => CLIENT_CODES.includes(f.code));
+    if (fl.length) {
+      const fact = fl.map((f) => clientFact(f, d)).join(' ');
+      const ask = [...new Set(fl.map((f) => ASK[f.code](d)))].join(' ');
+      items.push({ key: `exc:${d.id}:${fl.map((f) => f.code).join('+')}`, kind: 'Query', caseId: d.id, file: d.file_name, requestId: d.match?.requestId || null, codes: fl.map((f) => f.code), fact, ask });
+    }
+  }
+  if (docs.length) {
+    for (const r of coverage(sc, docs)) {
+      if (r.received < r.expectedCount) items.push({ key: `out:${r.id}`, kind: 'Outstanding', caseId: null, file: null, requestId: r.id, fact: `Request ${r.id}, ${r.title}: ${r.received} of ${r.expectedCount} received.`, ask: r.expectedCount - r.received === 1 ? 'Please send the outstanding document.' : `Please send the ${r.expectedCount - r.received} outstanding documents.` });
+    }
+  }
+  const draft = await kvGet('clientDraft', null);
+  return { items: items.map((x) => ({ ...x, sent: sent[x.key] || null })), draft, client: PERSONAS.client, engagement: sc.engagement };
+}
+async function draftClientRequest(keys, p) {
+  const { items, engagement } = await clientRequests();
+  const chosen = items.filter((x) => keys.includes(x.key));
+  if (!chosen.length) throw err(400, 'Select at least one item.');
+  const res = await fetch('/api/draft', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+    client: { name: PERSONAS.client.name, title: PERSONAS.client.title }, from: { name: p.name, title: p.title }, engagement: { client: engagement.client, yearEnd: engagement.yearEnd, id: engagement.id },
+    items: chosen.map((x) => ({ kind: x.kind, fact: x.fact, ask: x.ask })),
+  }) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw err(res.status, json.error || 'Drafting failed');
+  const draft = { subject: json.subject, body: json.body, keys: chosen.map((x) => x.key), by: p.name, at: nowIso(), drafted: json.drafted };
+  await kvSet('clientDraft', draft);
+  await audit({ ...SYS.ai, action: 'client.request.drafted', detail: { items: draft.keys.length, subject: draft.subject, requestedBy: p.name } });
+  return draft;
+}
+async function sendClientRequest({ subject, body }, p) {
+  const draft = await kvGet('clientDraft', null);
+  if (!draft) throw err(409, 'Draft the request first.');
+  if (!subject?.trim() || !body?.trim()) throw err(400, 'Subject and message are required.');
+  const sent = await kvGet('clientRequests', {});
+  const at = nowIso();
+  for (const k of draft.keys) sent[k] = { at, by: p.name, subject: subject.trim() };
+  await kvSet('clientRequests', sent);
+  const log = (await kvGet('clientMessages', []));
+  log.unshift({ at, by: p.name, to: PERSONAS.client.name, subject: subject.trim(), body: body.trim(), items: draft.keys.length, edited: body.trim() !== draft.body.trim() });
+  await kvSet('clientMessages', log);
+  await kvSet('clientDraft', null);
+  await audit({ actor: p.name, role: p.role, action: 'client.request.sent', detail: { to: PERSONAS.client.name, subject: subject.trim(), items: draft.keys.length, editedFromDraft: body.trim() !== draft.body.trim(), body: body.trim() } });
+  return { sent: draft.keys.length };
 }
 
 // ---------------------------------------------------------------- request router
@@ -515,6 +656,9 @@ export async function request(path, { method = 'GET', body = {}, as } = {}) {
     if (a === 'audit') return auditRows({ caseId: u.searchParams.get('case'), limit: Number(u.searchParams.get('limit') || 1000) });
     if (a === 'results') return results();
     if (a === 'register') return register();
+    if (a === 'client-requests') return clientRequests();
+    if (a === 'client-messages') return kvGet('clientMessages', []);
+    if (a === 'sample-eligible') return { count: (await sampleEligible()).length };
   }
   if (method === 'POST') {
     if (a === 'load-sample') {
@@ -529,6 +673,9 @@ export async function request(path, { method = 'GET', body = {}, as } = {}) {
     if (a === 'documents' && c === 'reject') return reject(b, body.reason, persona(as, ['reviewer']));
     if (a === 'documents' && c === 'reopen') return reopen(b, persona(as, ['reviewer']));
     if (a === 'documents' && c === 'signoff') return signoff(b, persona(as, ['approver']));
+    if (a === 'sample-approve') return sampleApprove(body.rate, persona(as, ['reviewer']));
+    if (a === 'client-requests' && b === 'draft') return draftClientRequest(body.keys || [], persona(as, ['reviewer']));
+    if (a === 'client-requests' && b === 'send') return sendClientRequest(body, persona(as, ['reviewer']));
     if (a === 'signoff-all') {
       const p = persona(as, ['approver']);
       const ids = (await docsAll()).filter((d) => d.review_status === 'approved' && !d.signoff_at).map((d) => d.id);
@@ -541,9 +688,30 @@ export async function request(path, { method = 'GET', body = {}, as } = {}) {
       const row = rows.find((r) => r.id === b);
       if (!row) throw err(404, 'Use case not found');
       const changes = {};
+      if (body.check) {
+        const def = FIVE_CHECKS.find((c) => c.key === body.check);
+        if (!def) throw err(400, 'Unknown check');
+        const checks = checksFor(row.id, row.checks);
+        const done = !!body.done;
+        if (done && (!body.note || String(body.note).trim().length < 5)) throw err(400, `Record the evidence for "${def.name}" before attesting it.`);
+        if (!done && GATED.includes(row.status)) throw err(409, `Release gate: ${row.id} is in ${row.status}. Move it out of ${row.status} before withdrawing a check.`);
+        checks[def.key] = done ? { done: true, by: p.name, at: new Date().toISOString(), note: String(body.note).trim().slice(0, 300) } : { done: false, by: p.name, at: new Date().toISOString(), note: String(body.note || '').trim().slice(0, 300) };
+        row.checks = checks;
+        await kvSet('register', rows);
+        await audit({ actor: p.name, role: p.role, action: 'register.check', detail: { useCase: b, check: def.name, done, note: checks[def.key].note } });
+        return row;
+      }
       for (const k of ['owner', 'status', 'notes']) {
         if (k in body && String(body[k]).trim() !== row[k]) {
           if (k === 'status' && !REGISTER_STATUSES.includes(body[k])) throw err(400, 'Unknown status');
+          if (k === 'status' && GATED.includes(body[k])) {
+            const checks = checksFor(row.id, row.checks);
+            const open = FIVE_CHECKS.filter((c) => !checks[c.key].done).map((c) => c.name);
+            if (open.length) {
+              await audit({ actor: p.name, role: p.role, action: 'register.gate.blocked', detail: { useCase: b, requested: body[k], openChecks: open } });
+              throw err(409, `Release gate: ${open.join(', ')} still open. All five checks must pass before ${body[k]}.`);
+            }
+          }
           changes[k] = { from: row[k], to: String(body[k]).trim().slice(0, 300) };
           row[k] = changes[k].to;
         }

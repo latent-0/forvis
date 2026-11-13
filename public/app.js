@@ -126,10 +126,12 @@ function statusChip(d) {
   if (d.stage === 'error') return '<span class="chip flag">Error</span>';
   if (d.stage !== 'queued') return `<span class="chip plain">Processing · ${esc(d.stage)}</span>`;
   if (d.signoff_at) return '<span class="chip navy">Signed off</span>';
-  if (d.review_status === 'approved') return '<span class="chip ok">Approved</span>';
+  if (d.review_status === 'approved' && !d.batch_approved) return '<span class="chip ok">Approved</span>';
   if (d.review_status === 'rejected') return '<span class="chip flag">Rejected</span>';
+  if (d.review_status === 'approved' && d.batch_approved) return '<span class="chip ok">Approved · batch</span>';
   if (d.lane === 'flagged') return '<span class="chip flag">Held: flagged</span>';
   if (d.lane === 'low_confidence') return '<span class="chip warn">Low confidence</span>';
+  if (d.sampled) return '<span class="chip sample">Sample check</span>';
   return '<span class="chip">Awaiting review</span>';
 }
 
@@ -138,6 +140,8 @@ const ACTION = {
   'match.completed': 'Matched', 'rules.checked': 'Rules checked', 'rules.rerun': 'Rules re-run', 'queued.for.review': 'Queued for review',
   'fields.edited': 'Fields edited', 'review.approved': 'Approved', 'review.rejected': 'Rejected', 'review.reopened': 'Reopened',
   'signoff.completed': 'Signed off', 'register.updated': 'Register updated', 'settings.updated': 'Settings changed', 'processing.failed': 'Processing failed',
+  'sample.selected': 'Sample selected', 'client.request.drafted': 'Client request drafted', 'client.request.sent': 'Client request sent',
+  'register.check': 'Governance check', 'register.gate.blocked': 'Release gate held',
 };
 const fv = (v) => (v == null ? 'empty' : Array.isArray(v) ? v.map((s) => `${s.party}: ${s.signed ? 'signed' : 'unsigned'}`).join('; ') : typeof v === 'number' ? money(v) : String(v));
 function describe(e) {
@@ -152,13 +156,18 @@ function describe(e) {
     case 'rules.rerun': return `${x.reason ? x.reason + ': ' : ''}${x.after?.length ? x.after.join(', ') : 'all checks pass'}`;
     case 'queued.for.review': return `${{ flagged: 'Needs attention', low_confidence: 'Low confidence warning', clean: 'Clean' }[x.lane]} · ${x.msFromUpload} ms from upload`;
     case 'fields.edited': return x.changes.map((c) => `${FIELD_LABEL[c.field] || c.field}: ${fv(c.from)} → ${fv(c.to)}`).join(' · ');
-    case 'review.approved': return x.exceptionsAccepted?.length ? `Exceptions accepted (${x.exceptionsAccepted.join(', ')}): ${x.note}` : x.note || 'No exceptions';
+    case 'review.approved': return x.batch ? 'Approved in batch: clean and not selected in the sample' : x.exceptionsAccepted?.length ? `Exceptions accepted (${x.exceptionsAccepted.join(', ')}): ${x.note}` : x.note || 'No exceptions';
     case 'review.rejected': return x.reason;
     case 'review.reopened': return `Was ${x.previous}`;
     case 'signoff.completed': return `Review by ${x.reviewedBy}`;
     case 'register.updated': return `${x.useCase}: ${Object.entries(x.changes).map(([k, v]) => `${k} → ${v.to}`).join(', ')}`;
     case 'settings.updated': return Object.entries(x).map(([k, v]) => `${k} ${v.from} → ${v.to}`).join(', ');
     case 'processing.failed': return x.error;
+    case 'sample.selected': return `${x.sampled.length} of ${x.eligible} clean documents held for individual review (${Math.round(x.rate * 100)}% random sample); ${x.batchApproved.length} approved in batch`;
+    case 'client.request.drafted': return `${x.items} item${x.items === 1 ? '' : 's'} · ${x.subject}`;
+    case 'client.request.sent': return `To ${x.to} · ${x.items} item${x.items === 1 ? '' : 's'}${x.editedFromDraft ? ' · edited before sending' : ''}`;
+    case 'register.check': return `${x.useCase} · ${x.check}: ${x.done ? 'attested' : 'withdrawn'}${x.note ? ` · ${x.note}` : ''}`;
+    case 'register.gate.blocked': return `${x.useCase} not moved to ${x.requested}: ${x.openChecks.join(', ')} open`;
     default: return JSON.stringify(x);
   }
 }
@@ -173,13 +182,18 @@ async function loadState() {
 function renderChrome() {
   const st = S.state;
   if (!st) return;
-  $('#personas').innerHTML = Object.values(st.personas).map((p) => `
-    <button class="${p.id === S.persona ? 'on' : ''}" data-persona="${p.id}" aria-pressed="${p.id === S.persona}">
-      <b>${esc(p.name)}</b><span>${esc(p.role)}</span>
+  $('#personas').innerHTML = Object.values(st.personas).map((p, i) => `
+    <button class="${p.id === S.persona ? 'on' : ''}" data-persona="${p.id}" aria-pressed="${p.id === S.persona}" title="${esc(p.name)}, ${esc(p.role)}" style="--i:${i + 6}">
+      <span class="av">${esc(p.name.replace(/[^A-Z]/g, '').slice(0, 2))}</span>
+      <span class="who lbl" style="--i:${i + 6}"><b>${esc(p.name)}</b><span>${esc(p.role)}</span></span>
     </button>`).join('');
   const pending = st.counts.pending;
   $('#nav-pending').textContent = pending ? String(pending) : '';
-  $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.view === (S.route.view === 'doc' ? 'queue' : S.route.view)));
+  $('#nav-intake').textContent = st.counts.processing ? String(st.counts.processing) : '';
+  const view = S.route.view === 'doc' ? 'queue' : S.route.view;
+  $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
+  moveActive();
+  engine.request('/api/client-requests').then((r) => { S.requests = r; const open = r.items.filter((x) => !x.sent).length; $('#nav-requests').textContent = open ? String(open) : ''; }).catch(() => {});
 }
 
 document.addEventListener('click', (e) => {
@@ -198,6 +212,117 @@ $('#reset').addEventListener('click', async () => {
   catch (err) { toast(err.message, true); }
 });
 
+// ---------------------------------------------------------------- navigation rail
+
+const rail = $('#rail');
+const peek = $('#peek');
+const desktop = () => window.matchMedia('(min-width: 761px)').matches;
+const pinned = () => document.body.classList.contains('rail-pinned');
+function setPinned(on) {
+  document.body.classList.toggle('rail-pinned', on);
+  rail.classList.toggle('pinned', on);
+  rail.classList.toggle('open', on);
+  $('#pin').setAttribute('aria-pressed', String(on));
+  $('#pin .lbl').textContent = on ? 'Collapse' : 'Keep open';
+  $('#pin').title = on ? 'Collapse the sidebar' : 'Keep the sidebar open';
+  safeSet('rail-pinned', on ? '1' : '0');
+}
+setPinned(safeGet('rail-pinned') === '1');
+$('#pin').addEventListener('click', () => { setPinned(!pinned()); if (!pinned()) { rail.classList.remove('open'); hidePeek(); } });
+
+let openTimer = null, closeTimer = null;
+rail.addEventListener('mouseenter', () => { if (!desktop()) return; clearTimeout(closeTimer); openTimer = setTimeout(() => rail.classList.add('open'), 90); });
+rail.addEventListener('mouseleave', () => {
+  clearTimeout(openTimer);
+  closeTimer = setTimeout(() => { if (!pinned() && !peek.matches(':hover')) rail.classList.remove('open'); }, 160);
+  setTimeout(() => { if (!peek.matches(':hover')) hidePeek(); }, 160);
+  $('.nav-hover').classList.remove('show');
+});
+rail.addEventListener('focusin', () => { if (desktop()) rail.classList.add('open'); });
+rail.addEventListener('focusout', (e) => { if (!rail.contains(e.relatedTarget) && !pinned()) { rail.classList.remove('open'); hidePeek(); } });
+peek.addEventListener('mouseleave', () => { setTimeout(() => { if (!rail.matches(':hover') && !peek.matches(':hover')) { hidePeek(); if (!pinned()) rail.classList.remove('open'); } }, 140); });
+peek.addEventListener('click', () => { if (peek.dataset.view) { location.hash = `#/${peek.dataset.view}`; hidePeek(); if (!pinned()) rail.classList.remove('open'); } });
+
+// The highlight glides to the hovered item; the active pill follows the route.
+function moveActive() {
+  const a = $('#nav a.on');
+  const pill = $('.nav-active');
+  if (!a) { pill.style.opacity = '0'; return; }
+  pill.style.opacity = '1';
+  pill.style.transform = `translateY(${a.offsetTop}px)`;
+}
+let peekTimer = null, peekFor = null;
+$$('#nav a').forEach((a) => {
+  const show = () => {
+    const h = $('.nav-hover');
+    h.style.transform = `translateY(${a.offsetTop}px)`;
+    h.classList.add('show');
+    if (!desktop()) return;
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => showPeek(a), peek.classList.contains('show') ? 60 : 260);
+  };
+  a.addEventListener('mouseenter', show);
+  a.addEventListener('focus', show);
+  a.addEventListener('click', () => { hidePeek(); if (!pinned()) setTimeout(() => rail.classList.remove('open'), 120); });
+});
+
+function hidePeek() { clearTimeout(peekTimer); peek.classList.remove('show'); peek.setAttribute('aria-hidden', 'true'); peekFor = null; }
+
+async function showPeek(a) {
+  const view = a.dataset.view;
+  const railW = pinned() || rail.classList.contains('open') ? rail.offsetWidth : 260;
+  const r = a.getBoundingClientRect();
+  peek.style.left = `${12 + Math.max(railW, 260) + 14}px`;
+  const fresh = peekFor !== view;
+  peekFor = view;
+  peek.dataset.view = view;
+  let html;
+  try { html = await peekHtml(view); } catch { html = '<div class="pk-empty">Preview unavailable.</div>'; }
+  if (peekFor !== view) return;
+  peek.innerHTML = `<div class="${fresh ? 'pk-anim' : ''}">${html}<div class="pk-foot">Open ${esc(a.querySelector('.lbl').textContent)} &rarr;</div></div>`;
+  const top = Math.min(Math.max(12, r.top + r.height / 2 - 70), window.innerHeight - peek.offsetHeight - 12);
+  peek.style.top = `${top}px`;
+  peek.classList.add('show');
+  peek.setAttribute('aria-hidden', 'false');
+}
+
+async function peekHtml(view) {
+  const st = S.state, c = st.counts, d = S.docs;
+  const stats = (arr) => `<div class="pk-stats">${arr.map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('')}</div>`;
+  const list = (rows) => (rows.length ? `<ul class="pk-list">${rows.map(([m, x, r]) => `<li><span class="m">${esc(m)}</span><span class="x">${esc(x)}</span>${r ? `<span class="m">${esc(r)}</span>` : ''}</li>`).join('')}</ul>` : '');
+  if (view === 'intake') {
+    const total = c.total || 1;
+    const bar = c.total ? `<div class="pk-bar"><i style="flex-grow:${c.flagged};background:var(--red)"></i><i style="flex-grow:${c.lowConfidence};background:var(--amber)"></i><i style="flex-grow:${c.clean};background:var(--blue)"></i><i style="flex-grow:${c.processing};background:var(--line-2)"></i></div>` : '';
+    const done = st.requests.filter((r) => r.received >= r.expectedCount).length;
+    return `<div class="pk-k">Intake</div><div class="pk-t">${esc(st.engagement.client)}</div>${stats([[c.total, 'received'], [c.processing, 'in progress'], [`${done}/${st.requests.length}`, 'items covered']])}${bar}${c.total ? `<div class="pk-empty">${c.flagged} flagged · ${c.lowConfidence} low confidence · ${c.clean} clean</div>` : '<div class="pk-empty">Nothing received yet. The client uploads here.</div>'}`;
+  }
+  if (view === 'queue') {
+    const att = d.filter((x) => x.review_status === 'pending' && x.stage === 'queued' && x.lane !== 'clean').slice(0, 3);
+    return `<div class="pk-k">Review queue</div><div class="pk-t">${c.pending} awaiting a decision</div>${stats([[c.flagged, 'flagged'], [c.lowConfidence, 'low conf.'], [c.approved, 'approved']])}${list(att.map((x) => [x.id.slice(-4), x.file_name, x.flags[0]?.code || '']))}`;
+  }
+  if (view === 'requests') {
+    const r = S.requests || (await engine.request('/api/client-requests'));
+    const open = r.items.filter((x) => !x.sent);
+    const by = (k) => open.filter((x) => x.kind === k).length;
+    return `<div class="pk-k">Client requests</div><div class="pk-t">${open.length} open item${open.length === 1 ? '' : 's'} for the client</div>${stats([[by('Query'), 'queries'], [by('Replacement'), 'replacements'], [by('Outstanding'), 'outstanding']])}${list(open.slice(0, 3).map((x) => [x.kind, x.file || x.requestId]))}`;
+  }
+  if (view === 'audit') {
+    const [rows, chain] = await Promise.all([engine.request('/api/audit?limit=4'), engine.request('/api/audit/verify')]);
+    return `<div class="pk-k">Audit trail</div><div class="pk-t">${chain.ok ? `Chain verified · ${chain.entries} entries` : `Chain broken at #${chain.brokenAt}`}</div>${rows.length ? list(rows.map((e) => [clock(e.ts), ACTION[e.action] || e.action, e.case_id ? e.case_id.slice(-4) : ''])) : '<div class="pk-empty">No entries yet.</div>'}`;
+  }
+  if (view === 'register') {
+    const reg = await engine.request('/api/register');
+    return `<div class="pk-k">Governance</div><div class="pk-t">${reg.rows.length} AI use cases on the register</div>${list(reg.rows.map((r) => [r.id, r.useCase, `${Object.values(r.checks).filter((x) => x.done).length}/5 · ${r.status}`]))}`;
+  }
+  if (view === 'results') {
+    if (!c.total) return '<div class="pk-k">Results</div><div class="pk-t">No run yet</div><div class="pk-empty">Load the batch to score it against the answer sheet.</div>';
+    const r = await engine.request('/api/results');
+    return `<div class="pk-k">Results</div><div class="pk-t">Against the answer sheet</div>${stats([[r.accuracy.value == null ? '—' : `${(r.accuracy.value * 100).toFixed(0)}%`, 'accuracy'], [`${r.planted.caught}/${r.planted.total}`, 'errors caught'], [r.time.avgSeconds == null ? '—' : `${r.time.avgSeconds.toFixed(1)}s`, 'per document']])}<div class="pk-empty">${r.planted.falsePositives.length} false flags · ${r.matching.correct}/${r.matching.total} matched</div>`;
+  }
+  return '';
+}
+window.addEventListener('resize', () => { moveActive(); hidePeek(); });
+
 // ---------------------------------------------------------------- router
 
 function parseRoute() {
@@ -207,8 +332,10 @@ function parseRoute() {
 }
 window.addEventListener('hashchange', () => { S.editing = false; S.animate = true; S.trace = null; S.route = parseRoute(); renderChrome(); render(); $('#view').focus({ preventScroll: true }); window.scrollTo(0, 0); });
 
-const VIEWS = { intake: renderIntake, queue: renderQueue, doc: renderDoc, audit: renderAudit, register: renderRegister, results: renderResults };
+const VIEWS = { intake: renderIntake, queue: renderQueue, doc: renderDoc, requests: renderRequests, audit: renderAudit, register: renderRegister, results: renderResults };
+let renderSeq = 0;
 async function render() {
+  const token = ++renderSeq;
   const fn = VIEWS[S.route.view] || renderIntake;
   const animate = S.animate;
   S.animate = false;
@@ -216,7 +343,9 @@ async function render() {
   try {
     await fn();
     if (animate && !reduceMotion()) { const pg = $('.page'); if (pg) { pg.classList.remove('enter'); void pg.offsetWidth; pg.classList.add('enter'); setTimeout(() => pg.classList.remove('enter'), 1000); } }
-  } catch (err) { $('#view').innerHTML = `<div class="page"><h1>Something went wrong</h1><p class="sub">${esc(err.message)}</p></div>`; }
+  } catch (err) {
+    if (token !== renderSeq) return; // a newer render replaced this one
+    $('#view').innerHTML = `<div class="page"><h1>Something went wrong</h1><p class="sub">${esc(err.message)}</p></div>`; }
 }
 
 // Live refresh: throttle, and never clobber a form the user is typing in.
@@ -235,6 +364,7 @@ function scheduleRefresh(caseId) {
     else if (v === 'doc') { if (!S.editing && !typing && cases.has(S.route.id)) renderDoc(); }
     else if (v === 'audit') { if (!typing) renderAudit(); }
     else if (v === 'results' || v === 'register') { if (!typing) render(); }
+    else if (v === 'requests') { if (!typing && !$('#draft')) render(); }
   }, 350);
 }
 
@@ -331,7 +461,7 @@ async function renderIntake() {
   animateCounts($('#flow'));
   const entries = await api('/api/audit?limit=300');
   const log = $('#log');
-  if (entries.length) { log.innerHTML = ''; entries.slice().reverse().forEach((x) => appendLog(x, false)); }
+  if (log && entries.length) { log.innerHTML = ''; entries.slice().reverse().forEach((x) => appendLog(x, false)); }
 }
 
 function updateIntake() {
@@ -404,7 +534,7 @@ function renderQueue() {
   $('#view').innerHTML = `<div class="page">
     <div class="head">
       <div><div class="eyebrow">Reviewer queue</div><h1>Review queue</h1><div class="sub">Nothing leaves this queue until a named reviewer approves, edits or rejects it.</div></div>
-      <div id="signall">${S.persona === 'approver' ? `<button class="btn navy" id="signoff-all" ${awaiting ? '' : 'disabled'}>Sign off approved (${awaiting})</button>` : ''}</div>
+      <div id="signall" class="row">${S.persona === 'reviewer' ? '<button class="btn" id="sample-approve">Approve clean with sample check</button>' : ''}${S.persona === 'approver' ? `<button class="btn navy" id="signoff-all" ${awaiting ? '' : 'disabled'}>Sign off approved (${awaiting})</button>` : ''}</div>
     </div>
     <div class="tabs" role="tablist" id="tabs"></div>
     <div class="table-wrap" id="qtable"></div>
@@ -413,7 +543,30 @@ function renderQueue() {
     if (!(await confirmDialog('Sign off approved documents?', `${awaiting} approved document${awaiting === 1 ? '' : 's'} will be signed off by ${S.state.personas.approver.name}. Each sign-off is logged.`, 'Sign off'))) return;
     try { const r = await api('/api/signoff-all', { method: 'POST' }); toast(`${r.signedOff} signed off`); await loadState(); renderQueue(); } catch (err) { toast(err.message, true); }
   });
+  $('#sample-approve')?.addEventListener('click', sampleDialog);
   renderQueueTable();
+}
+
+async function sampleDialog() {
+  const { count } = await api('/api/sample-eligible');
+  const d = $('#dialog');
+  if (!count) { toast('No clean documents are waiting. Flagged and low-confidence documents always need an individual decision.'); return; }
+  const n = (r) => Math.max(1, Math.ceil(count * r));
+  d.innerHTML = `<h3>Approve clean documents with a sample check</h3>
+    <p>${count} document${count === 1 ? '' : 's'} passed every coded check with confidence above the threshold. A random sample stays in your queue for individual review; the rest are approved in one step. The sample and every approval are logged.</p>
+    <div class="row" style="margin:-6px 0 18px" role="radiogroup" aria-label="Sample size">
+      ${[0.1, 0.2, 0.3].map((r) => `<label class="check"><input type="radio" name="rate" value="${r}" ${r === 0.2 ? 'checked' : ''}> ${Math.round(r * 100)}% <span class="faint">(${n(r)})</span></label>`).join('')}
+    </div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" value="no">Cancel</button><button class="btn primary" value="yes">Select sample and approve the rest</button></div>`;
+  const ok = await new Promise((resolve) => { $$('button', d).forEach((b) => b.addEventListener('click', () => { d.close(); resolve(b.value === 'yes'); })); d.addEventListener('cancel', () => resolve(false), { once: true }); d.showModal(); });
+  if (!ok) return;
+  const rate = Number(($('input[name=rate]:checked', d) || {}).value || 0.2);
+  try {
+    const r = await api('/api/sample-approve', { method: 'POST', body: { rate } });
+    toast(`${r.approved} approved in batch · ${r.sampled.length} held in the sample for your review`);
+    S.queueTab = 'review';
+    await loadState(); renderQueue();
+  } catch (err) { toast(err.message, true); }
 }
 
 function renderQueueTable() {
@@ -484,9 +637,11 @@ function fieldInput(k, v) {
 }
 
 async function renderDoc() {
+  const rt = renderSeq;
   const id = S.route.id;
   const d = await api(`/api/documents/${encodeURIComponent(id)}`);
   const integrity = await api(`/api/documents/${encodeURIComponent(id)}/integrity`).catch(() => null);
+  if (rt !== renderSeq) return;
   let list = queueList(S.queueTab);
   if (!list.some((x) => x.id === id)) list = S.docs;
   const idx = list.findIndex((x) => x.id === id);
@@ -579,6 +734,7 @@ async function renderDoc() {
           ${hard.map(flagCard).join('')}
           ${warns.map(flagCard).join('')}
           ${d.stage === 'queued' && !flags.length ? '<div class="clean">All coded checks passed</div>' : ''}
+          ${d.sampled ? '<div class="note-box">Selected in the random sample. Clean documents not in the sample were approved in batch; this one needs your individual decision.</div>' : ''}
           ${(() => { const cleared = (d.extraction?.initialFlags || []).filter((c) => !flags.some((x) => x.code === c)); return cleared.length ? `<div class="note-box">Raised at intake and cleared after a reviewer edit: ${cleared.map((c) => `<span class="code${c === 'LOW_CONFIDENCE' ? ' warn' : ''}">${esc(c)}</span>`).join(' ')}. The edit is in the activity log below.</div>` : ''; })()}
         </section>
 
@@ -702,11 +858,87 @@ async function renderPdf(host, url, title) {
   }
 }
 
+// ---------------------------------------------------------------- client requests
+
+async function renderRequests() {
+  const rt = renderSeq;
+  const [r, messages] = await Promise.all([api('/api/client-requests'), api('/api/client-messages')]);
+  if (rt !== renderSeq) return;
+  S.requests = r;
+  const isClient = S.persona === 'client';
+  const canDraft = S.persona === 'reviewer';
+  const open = r.items.filter((x) => !x.sent);
+  if (!S.reqSel) S.reqSel = new Set(open.map((x) => x.key));
+  for (const k of [...S.reqSel]) if (!open.some((x) => x.key === k)) S.reqSel.delete(k);
+
+  const history = messages.length ? messages.map((m) => `<div class="msg"><div class="spread"><b style="color:var(--navy);font-weight:600">${esc(m.subject)}</b><span class="muted" style="font-size:12px">${stamp(m.at)}</span></div>
+      <div class="muted" style="font-size:12.5px;margin-top:2px">From ${esc(m.by)} to ${esc(m.to)} · ${m.items} item${m.items === 1 ? '' : 's'}${m.edited ? ' · edited before sending' : ''}</div><pre>${esc(m.body)}</pre></div>`).join('') : '<div class="empty-state" style="padding:28px 0">No messages sent yet.</div>';
+
+  if (isClient) {
+    $('#view').innerHTML = `<div class="page">
+      <div class="head"><div><div class="eyebrow">From your audit team</div><h1>Requests for you</h1>
+      <div class="sub">What the audit team still needs. Reply by uploading documents on the intake page.</div></div>
+      <a class="btn primary" href="#/intake">Upload documents</a></div>
+      <div style="max-width:820px">${history}</div></div>`;
+    return;
+  }
+
+  const draft = r.draft;
+  $('#view').innerHTML = `<div class="page">
+    <div class="head"><div><div class="eyebrow">Client follow-up</div><h1>Client requests</h1>
+      <div class="sub">Open queries, replacements and outstanding items, gathered from the checks. AI drafts one message; a person edits and sends it.</div></div></div>
+    ${open.length ? `<div class="table-wrap"><table class="table"><thead><tr><th style="width:28px"><input type="checkbox" id="req-all" aria-label="Select all" ${S.reqSel.size === open.length ? 'checked' : ''} ${canDraft ? '' : 'disabled'}></th><th>Type</th><th>Item</th><th>What we found</th><th>What we need</th></tr></thead><tbody>
+      ${open.map((x, i) => `<tr style="--i:${Math.min(i, 18)}"><td><input type="checkbox" data-key="${esc(x.key)}" ${S.reqSel.has(x.key) ? 'checked' : ''} ${canDraft ? '' : 'disabled'} aria-label="Include ${esc(x.file || x.requestId)}"></td>
+        <td><span class="req-kind ${x.kind}">${x.kind}</span></td>
+        <td style="white-space:nowrap">${x.caseId ? `<a class="mono" href="#/doc/${encodeURIComponent(x.caseId)}">${esc(x.caseId)}</a><div class="faint ellipsis" style="font-size:12px;max-width:200px">${esc(x.file)}</div>` : `<span class="mono">${esc(x.requestId)}</span>`}</td>
+        <td style="min-width:260px">${esc(x.fact)}</td><td style="min-width:200px" class="muted">${esc(x.ask)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="row" style="margin-top:16px">
+      ${canDraft ? `<button class="btn primary" id="draft-btn" ${S.reqSel.size ? '' : 'disabled'}>Draft message for ${S.reqSel.size} item${S.reqSel.size === 1 ? '' : 's'}</button>` : `<div class="gate spread" style="flex:1"><span>The reviewer drafts and sends client requests.</span><button class="btn sm" data-persona="reviewer">Act as reviewer</button></div>`}
+    </div>` : `<div class="empty-state">${S.docs.length ? 'Nothing open for the client. Every query has been sent or resolved.' : 'Load the batch first. Requests appear here when checks find something the client needs to answer.'}</div>`}
+    ${draft ? `<div class="draft" id="draft">
+      <div class="spread"><h2 style="margin:0">Draft to ${esc(r.client.name)}</h2><span class="chip ${draft.drafted === 'ai' ? 'ok' : 'plain'}">${draft.drafted === 'ai' ? 'Drafted by AI' : 'Drafted from template'}</span></div>
+      <div class="meta">${draft.drafted === 'ai' ? 'Facts come from the checks and are verified word for word before the draft is shown. Edit anything before sending.' : 'The AI draft was unavailable or did not keep every fact exactly, so the template was used.'}</div>
+      <label class="label" for="d-subject" style="display:block;margin-bottom:6px">Subject</label>
+      <input id="d-subject" value="${esc(draft.subject)}">
+      <label class="label" for="d-body" style="display:block;margin:14px 0 6px">Message</label>
+      <textarea id="d-body">${esc(draft.body)}</textarea>
+      <div class="row" style="margin-top:14px">
+        ${canDraft ? `<button class="btn primary" id="send-btn">Send to ${esc(r.client.name)}</button><button class="btn" id="redraft-btn">Draft again</button>` : ''}
+        <span class="muted" style="font-size:12.5px">Sending records the message in the audit trail and on the client's request page.</span>
+      </div>
+      <div class="err" id="send-err"></div>
+    </div>` : ''}
+    <div class="section"><h2>Sent</h2><div style="max-width:880px">${history}</div></div>
+  </div>`;
+
+  const updateBtn = () => { const b = $('#draft-btn'); if (b) { b.disabled = !S.reqSel.size; b.textContent = `Draft message for ${S.reqSel.size} item${S.reqSel.size === 1 ? '' : 's'}`; } };
+  $$('input[data-key]').forEach((cb) => cb.addEventListener('change', () => { cb.checked ? S.reqSel.add(cb.dataset.key) : S.reqSel.delete(cb.dataset.key); $('#req-all').checked = S.reqSel.size === open.length; updateBtn(); }));
+  $('#req-all')?.addEventListener('change', (e) => { $$('input[data-key]').forEach((cb) => { cb.checked = e.target.checked; e.target.checked ? S.reqSel.add(cb.dataset.key) : S.reqSel.delete(cb.dataset.key); }); updateBtn(); });
+  const doDraft = async (btn) => {
+    btn.disabled = true; const t = btn.textContent; btn.innerHTML = '<span class="pulse"></span>Drafting';
+    try { await api('/api/client-requests/draft', { method: 'POST', body: { keys: [...S.reqSel] } }); await renderRequests(); $('#draft')?.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'start' }); }
+    catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = t; }
+  };
+  $('#draft-btn')?.addEventListener('click', (e) => doDraft(e.currentTarget));
+  $('#redraft-btn')?.addEventListener('click', (e) => doDraft(e.currentTarget));
+  $('#send-btn')?.addEventListener('click', async () => {
+    try {
+      const out = await api('/api/client-requests/send', { method: 'POST', body: { subject: $('#d-subject').value, body: $('#d-body').value } });
+      S.reqSel = null;
+      toast(`Sent to ${r.client.name} · ${out.sent} item${out.sent === 1 ? '' : 's'} logged`);
+      await loadState(); renderRequests();
+    } catch (err) { $('#send-err').textContent = err.message; }
+  });
+}
+
 // ---------------------------------------------------------------- audit
 
 async function renderAudit() {
+  const rt = renderSeq;
   const caseId = S.route.id;
   const [rows, chain] = await Promise.all([api(caseId ? `/api/audit?case=${encodeURIComponent(caseId)}` : '/api/audit?limit=1000'), api('/api/audit/verify')]);
+  if (rt !== renderSeq) return;
   const q = S.auditFilter.toLowerCase();
   const shown = q ? rows.filter((e) => `${e.case_id} ${e.actor} ${e.role} ${e.action} ${ACTION[e.action]} ${describe(e)}`.toLowerCase().includes(q)) : rows;
   const keepFocus = document.activeElement?.id === 'afilter';
@@ -746,22 +978,26 @@ async function renderAudit() {
 // ---------------------------------------------------------------- register
 
 async function renderRegister() {
+  const rt = renderSeq;
   const [reg, sc] = await Promise.all([api('/api/register'), S.scenario ? Promise.resolve(S.scenario) : api('/api/scenario')]);
+  if (rt !== renderSeq) return;
   S.scenario = sc;
   const can = S.persona === 'approver';
   $('#view').innerHTML = `<div class="page">
-    <div class="head"><div><div class="eyebrow">Visibility</div><h1>Use case register</h1>
-      <div class="sub">One line per AI use case: what it does, the model, the data, the owner and where it stands.${can ? '' : ' Owner, status and notes are edited by the approver.'}</div></div></div>
-    <div class="table-wrap" id="register-table"><table class="table"><thead><tr><th>ID</th><th>Use case</th><th>Model</th><th>Data source</th><th>Owner</th><th>Human control</th><th>Status</th><th>Notes</th></tr></thead><tbody>
+    <div class="head"><div><div class="eyebrow">Visibility, control, accountability</div><h1>Governance</h1>
+      <div class="sub">The register of AI use cases, the five checks each must pass, and the release gate that holds Pilot and Live until they do.${can ? '' : ' Checks, owner and status are changed by the approver.'}</div></div></div>
+    <div class="table-wrap" id="register-table"><table class="table"><thead><tr><th>ID</th><th>Use case</th><th>Five checks</th><th>Model</th><th>Data source</th><th>Owner</th><th>Human control</th><th>Status</th><th>Notes</th></tr></thead><tbody>
       ${reg.rows.map((r) => `<tr data-uc="${esc(r.id)}">
         <td class="mono">${esc(r.id)}</td>
         <td style="min-width:180px"><div style="font-weight:500;color:var(--navy)">${esc(r.useCase)}</div><div class="muted" style="font-size:12.5px">${esc(r.serviceLine)} · ${esc(r.family)}</div>
           ${r.live ? `<div class="faint" style="font-size:12px;margin-top:4px">${r.live.documents} documents · ${r.live.rules} rules · threshold ${pct(r.live.threshold)}${r.live.lastRun ? ` · last run ${stamp(r.live.lastRun)}` : ''}</div>` : ''}</td>
+        <td style="min-width:150px"><div class="checks">${reg.fiveChecks.map((c) => { const v = r.checks[c.key]; const tip = `${c.name}: ${c.question}. ${v.done ? `Attested by ${v.by}${v.note ? `: ${v.note}` : ''}` : `Open${v.note ? `: ${v.note}` : ''}`}`; return can ? `<button class="ck${v.done ? ' done' : ''}" data-ck="${c.key}" title="${esc(tip)}" aria-label="${esc(tip)}">${c.name[0]}</button>` : `<span class="ck${v.done ? ' done' : ''}" title="${esc(tip)}">${c.name[0]}</span>`; }).join('')}</div>
+          <div class="relgate ${r.gateOpen ? 'open' : ''}">${r.gateOpen ? 'Release gate open' : `Gate held · ${reg.fiveChecks.filter((c) => !r.checks[c.key].done).length} open`}</div></td>
         <td style="min-width:140px">${esc(r.model)}</td>
         <td style="min-width:200px;font-size:13px">${esc(r.dataSource)}</td>
         <td style="min-width:150px"><input class="reg-edit" data-k="owner" value="${esc(r.owner)}" ${can ? '' : 'disabled'}></td>
         <td style="min-width:200px;font-size:13px">${esc(r.humanControl)}</td>
-        <td><select class="reg-edit" data-k="status" ${can ? '' : 'disabled'}>${reg.statuses.map((s) => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
+        <td style="min-width:116px"><select class="reg-edit" data-k="status" ${can ? '' : 'disabled'}>${reg.statuses.map((s) => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
         <td style="min-width:180px"><input class="reg-edit" data-k="notes" value="${esc(r.notes)}" ${can ? '' : 'disabled'}></td>
       </tr>`).join('')}
     </tbody></table></div>
@@ -784,11 +1020,32 @@ async function renderRegister() {
       </div>
     </div>
   </div>`;
+  $$('button.ck').forEach((b) => b.addEventListener('click', () => checkDialog(b.closest('tr').dataset.uc, b.dataset.ck, reg)));
   $$('.reg-edit').forEach((el) => el.addEventListener('change', async () => {
     const uc = el.closest('tr').dataset.uc;
     try { await api(`/api/register/${uc}`, { method: 'POST', body: { [el.dataset.k]: el.value } }); toast('Register updated'); }
     catch (err) { toast(err.message, true); renderRegister(); }
   }));
+  async function checkDialog(uc, key, regData) {
+    const row = regData.rows.find((x) => x.id === uc);
+    const def = regData.fiveChecks.find((c) => c.key === key);
+    const cur = row.checks[key];
+    const d = $('#dialog');
+    d.innerHTML = `<h3>${esc(def.name)}: ${esc(def.question)}</h3>
+      <p>${esc(uc)} · ${esc(row.useCase)}. ${cur.done ? `Attested by ${esc(cur.by)}.` : 'Not yet attested.'}</p>
+      <label class="label" for="ck-note" style="display:block;margin-bottom:6px">${cur.done ? 'Reason for withdrawing (optional)' : 'Evidence for this check'}</label>
+      <textarea id="ck-note" class="note" placeholder="${cur.done ? '' : 'For example: reviewed by the risk team on 12 November'}">${cur.done ? '' : esc(cur.note || '')}</textarea>
+      <div class="err" id="ck-err"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" value="no">Cancel</button><button class="btn ${cur.done ? 'danger' : 'primary'}" value="yes">${cur.done ? 'Withdraw' : 'Attest'}</button></div>`;
+    const submit = async () => {
+      try {
+        await api(`/api/register/${uc}`, { method: 'POST', body: { check: key, done: !cur.done, note: $('#ck-note').value } });
+        d.close(); toast(`${def.name} ${cur.done ? 'withdrawn' : 'attested'}`); renderRegister();
+      } catch (err) { $('#ck-err').textContent = err.message; }
+    };
+    $$('button', d).forEach((b) => b.addEventListener('click', () => { if (b.value === 'yes') submit(); else d.close(); }));
+    d.showModal();
+  }
   $('#save-thr')?.addEventListener('click', async () => {
     try { await api('/api/settings', { method: 'POST', body: { threshold: Number($('#thr').value) } }); toast('Threshold saved'); await loadState(); }
     catch (err) { toast(err.message, true); }
@@ -798,7 +1055,9 @@ async function renderRegister() {
 // ---------------------------------------------------------------- results
 
 async function renderResults() {
+  const rt = renderSeq;
   const r = await api('/api/results');
+  if (rt !== renderSeq) return;
   const can = S.persona === 'approver';
   if (!r.documentsScored) {
     $('#view').innerHTML = `<div class="page"><div class="head"><div><div class="eyebrow">Success measures</div><h1>Results</h1></div></div>
