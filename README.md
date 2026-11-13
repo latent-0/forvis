@@ -19,7 +19,7 @@ npm start                 # http://localhost:4317
 
 1. Import the folder as a Vercel project (or run `vercel` in it). No build step; `vercel.json` serves `public/` and deploys `api/extract.js` as a function.
 2. In Project Settings → Environment Variables, add the five `EXTRACTION_*` variables from `.env.example` for Production and Preview.
-3. Deploy (`vercel --prod`).
+3. Deploy (`vercel --prod`). The project is linked to GitHub, so every push to `main` deploys to production and other branches get preview deployments.
 
 The key stays on the server. The browser never sees it.
 
