@@ -1,0 +1,363 @@
+{
+  "version": "synthetic-v1",
+  "fields": [
+    "doc_type",
+    "entity",
+    "date",
+    "amount",
+    "reference"
+  ],
+  "documents": [
+    {
+      "file": "INV_HS-40917.pdf",
+      "sha256": "9d34d13b7f5030cbc405e0cf0c3f86416d2375f2c2e7e85dd2004e4cd39db4af",
+      "request": "R01",
+      "ledgerLine": "L-2101",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-03-14",
+        "amount": 18450,
+        "reference": "HS-40917"
+      },
+      "planted": null
+    },
+    {
+      "file": "arbor packaging april.pdf",
+      "sha256": "93a65533ffd02741f89f4bbd9ea8c07d7ebb90c331ba69fea46e5e5335ac3b0d",
+      "request": "R01",
+      "ledgerLine": "L-2102",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-04-02",
+        "amount": 3305.4,
+        "reference": "AP-2211"
+      },
+      "planted": null
+    },
+    {
+      "file": "KF-88310.pdf",
+      "sha256": "270b0ce26c8a07f31ab5a6a17380231f17956f80936f159308158af130db39de",
+      "request": "R01",
+      "ledgerLine": "L-2103",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-04-19",
+        "amount": 6912,
+        "reference": "KF-88310"
+      },
+      "planted": null
+    },
+    {
+      "file": "Lumen_Electrical_LES-5521.pdf",
+      "sha256": "bffda83d2f9675a3dfe596e7b869169dcbde0bfa9f0bea4f1dea1095058dc30d",
+      "request": "R01",
+      "ledgerLine": "L-2104",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-05-07",
+        "amount": 9840.12,
+        "reference": "LES-5521"
+      },
+      "planted": null
+    },
+    {
+      "file": "pellham tooling 00764.pdf",
+      "sha256": "a0527db51b1f49b257fa5be9cf80b0ce8e8c3a53201feaaae995a0b3b5426828",
+      "request": "R01",
+      "ledgerLine": "L-2105",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-05-28",
+        "amount": 12300,
+        "reference": "PT-00764"
+      },
+      "planted": null
+    },
+    {
+      "file": "TS-2026-118 invoice.pdf",
+      "sha256": "cb6a34cdf83f174484ad20fb16546302788474d0745a759945e69abd1103ea05",
+      "request": "R02",
+      "ledgerLine": "L-2106",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-06-15",
+        "amount": 24000,
+        "reference": "TS-2026-118"
+      },
+      "planted": null
+    },
+    {
+      "file": "BVF-3093.pdf",
+      "sha256": "cbbbde2426647e32716c7d39e899afce83308ec8963968f81fd740b820d76b35",
+      "request": "R02",
+      "ledgerLine": "L-2107",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-07-03",
+        "amount": 14870,
+        "reference": "BVF-3093"
+      },
+      "planted": {
+        "code": "AMOUNT_TOLERANCE",
+        "description": "Invoice amount differs from the ledger line (GBP 14,870.00 on the invoice, GBP 14,780.00 in the ledger)"
+      }
+    },
+    {
+      "file": "Halden HS-41388.pdf",
+      "sha256": "536db0451ed9247d8cde28e4970d686967eeb709b15e68442c8a19f5579e3f2c",
+      "request": "R02",
+      "ledgerLine": "L-2108",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-08-11",
+        "amount": 21115.2,
+        "reference": "HS-41388"
+      },
+      "planted": null
+    },
+    {
+      "file": "corran_cc77204.pdf",
+      "sha256": "64e6a39d2c0fdd60833705ed0d378378f9c6d4c45f0b364ec1b3566474e6cd9a",
+      "request": "R02",
+      "ledgerLine": "L-2109",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-09-02",
+        "amount": 4629.05,
+        "reference": "CC-77204"
+      },
+      "planted": null
+    },
+    {
+      "file": "scan_0042.pdf",
+      "sha256": "8bece4274a35c4a753f1a0eb4bc47368eba0da6030e2319ec0e3910fa600ffea",
+      "request": "R01",
+      "ledgerLine": "L-2103",
+      "expected": {
+        "doc_type": "invoice",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-04-19",
+        "amount": 6912,
+        "reference": "KF-88310"
+      },
+      "planted": {
+        "code": "DUPLICATE",
+        "description": "Duplicate of invoice KF-88310 sent again under a different file name"
+      }
+    },
+    {
+      "file": "Statement_Sep26_4417.pdf",
+      "sha256": "d9431e10f196360db128f7f71b0f25abba84edefe8b31e2a2e1c93682aa8aeee",
+      "request": "R03",
+      "expected": {
+        "doc_type": "bank_statement",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-09-30",
+        "amount": 412906.55,
+        "reference": "4417"
+      },
+      "planted": null
+    },
+    {
+      "file": "payroll acct sept.pdf",
+      "sha256": "a9e4f4aeba0062d59d794e0229abc16042dd7e7a9d1859c21be1dfdc2324f11c",
+      "request": "R04",
+      "expected": {
+        "doc_type": "bank_statement",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-09-30",
+        "amount": 86210,
+        "reference": "4425"
+      },
+      "planted": null
+    },
+    {
+      "file": "Brightwater deposit 7781 Sep 2026.pdf",
+      "sha256": "673b01e990db587f81df20facca2b2e23b744061b29629254928f2e3d607768d",
+      "request": "R05",
+      "expected": {
+        "doc_type": "bank_statement",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-09-30",
+        "amount": 250812.33,
+        "reference": "7781"
+      },
+      "planted": null
+    },
+    {
+      "file": "USD_9930_statement.pdf",
+      "sha256": "861b815a7c546b779a5c1d33147ad616d74e29b2d4513a827266c51a43df5bd4",
+      "request": "R06",
+      "expected": {
+        "doc_type": "bank_statement",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-08-31",
+        "amount": 61002.47,
+        "reference": "9930"
+      },
+      "planted": {
+        "code": "PERIOD",
+        "description": "Statement covers August 2026; the request is for September 2026"
+      }
+    },
+    {
+      "file": "MSA Halden Steel signed.pdf",
+      "sha256": "b37376f008cce4b81c650bf8c9037993f0791fb6b827a19899233be6694542e4",
+      "request": "R07",
+      "expected": {
+        "doc_type": "contract",
+        "entity": "Northwind Components Ltd",
+        "date": "2025-11-03",
+        "amount": 240000,
+        "reference": "MSA-HS-2025-01"
+      },
+      "planted": null
+    },
+    {
+      "file": "Lease_Unit4_Riverside.pdf",
+      "sha256": "c2371a60919ae11ca40b4f426761ff1a638639dd40ebeb27f4d22febb98cbb93",
+      "request": "R08",
+      "expected": {
+        "doc_type": "contract",
+        "entity": "Northwind Components Ltd",
+        "date": "2024-01-15",
+        "amount": 1080000,
+        "reference": "LSE-RP-0004"
+      },
+      "planted": null
+    },
+    {
+      "file": "Corvel distribution agreement.pdf",
+      "sha256": "b5c413fd758597102461f6792fe48d3ef31b113b97ed0928c51edb6efc64311f",
+      "request": "R09",
+      "expected": {
+        "doc_type": "contract",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-02-20",
+        "amount": null,
+        "reference": "DA-CRV-2026"
+      },
+      "planted": null
+    },
+    {
+      "file": "Tessaly licence agreement.pdf",
+      "sha256": "007f02091aa0a560e3f68bb6bb3015f34da8f66108478d73d642b04661e72c20",
+      "request": "R10",
+      "expected": {
+        "doc_type": "contract",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-06-01",
+        "amount": 60000,
+        "reference": "TSL-2026-031"
+      },
+      "planted": {
+        "code": "SIGNATURE",
+        "description": "Contract is missing the Tessaly Systems signature"
+      }
+    },
+    {
+      "file": "Brightwater facility letter.pdf",
+      "sha256": "25bd013442d30b65c56c26bd2f74c3987880de1c2fd51c3d373964de7704e731",
+      "request": "R11",
+      "expected": {
+        "doc_type": "contract",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-04-30",
+        "amount": 1500000,
+        "reference": "BWB-TLF-55120"
+      },
+      "planted": null
+    },
+    {
+      "file": "Brightwater bank confirmation.pdf",
+      "sha256": "cc6966c8e3869b0ae0d0b3773059732313158665bfc6972d89f6eb57bb0e770d",
+      "request": "R12",
+      "expected": {
+        "doc_type": "confirmation",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-09-30",
+        "amount": 412906.55,
+        "reference": "BWB-AC-26-1187"
+      },
+      "planted": null
+    },
+    {
+      "file": "Corvel_confirmation_signed.pdf",
+      "sha256": "446cda07f84f911a9b04da6171d682877f00b25a1e19399e3592a558bc3dc18e",
+      "request": "R13",
+      "expected": {
+        "doc_type": "confirmation",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-09-30",
+        "amount": 186420,
+        "reference": "CRV-AP-0930"
+      },
+      "planted": null
+    },
+    {
+      "file": "halden conf.pdf",
+      "sha256": "4660853d23976100a58324ad331cf7c8810ebd39fc8612b9b258230069fb57e2",
+      "request": "R14",
+      "expected": {
+        "doc_type": "confirmation",
+        "entity": "Northwind Logistics Ltd",
+        "date": "2026-09-30",
+        "amount": 39565.2,
+        "reference": "HS-CONF-0930"
+      },
+      "planted": {
+        "code": "WRONG_ENTITY",
+        "description": "Confirmation is for Northwind Logistics Ltd, not the audited entity"
+      }
+    },
+    {
+      "file": "Board minutes 22 Apr 2026.pdf",
+      "sha256": "a77bdc0e54869b58c55279a986d2aa1803a78ea89448d5aec9765c2f44095f31",
+      "request": "R15",
+      "expected": {
+        "doc_type": "board_minutes",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-04-22",
+        "amount": null,
+        "reference": "BR-2026-04"
+      },
+      "planted": null
+    },
+    {
+      "file": "Minutes_2026-06-10.pdf",
+      "sha256": "a46ab12b0b93d6bab576aa2076cd62ba6d2f79e5eec90bb0e3655ee5cf14037c",
+      "request": "R15",
+      "expected": {
+        "doc_type": "board_minutes",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-06-10",
+        "amount": null,
+        "reference": "BR-2026-06"
+      },
+      "planted": null
+    },
+    {
+      "file": "IMG_7731.pdf",
+      "sha256": "a45e9fe97d54059062fe4ae429397fe7b3a7cd0572c19e05b8ed3b485626e7a1",
+      "request": "R15",
+      "expected": {
+        "doc_type": "board_minutes",
+        "entity": "Northwind Components Ltd",
+        "date": "2026-09-24",
+        "amount": null,
+        "reference": "BR-2026-09"
+      },
+      "planted": null,
+      "note": "Low-quality copy without field labels; expected to fall below the confidence threshold."
+    }
+  ]
+}
